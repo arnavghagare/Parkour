@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cute Robot Runner</title>
+    <!-- Load Tailwind CSS for modern UI styling --><script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the game container and canvas */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1f2937; /* Dark background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 900px;
+            background-color: #374151; /* Card background */
+            border-radius: 1rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #gameCanvas {
+            width: 100%;
+            height: 250px; /* Fixed height for the game area */
+            background: linear-gradient(to bottom, #a7e6f6, #f0fdf4); /* Default sky gradient */
+            border: 4px solid #4b5563;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            touch-action: manipulation; /* Improves touch responsiveness */
+        }
+
+        .game-ui {
+            padding: 1rem 0;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 0.5rem 1.5rem;
+            font-weight: bold;
+            border-radius: 9999px;
+            transition: all 0.2s;
+            cursor: pointer;
+            box-shadow: 0 4px #1f2937;
+            position: relative;
+            top: 0;
+        }
+
+        .btn:active {
+            box-shadow: 0 1px #1f2937;
+            top: 3px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <h1 class="text-3xl font-extrabold text-green-400 mb-4">🤖Robot Runner Parkour</h1>
+
+    <div id="message-box" class="text-center mb-4 p-2 w-full text-lg font-semibold text-yellow-300 transition-opacity duration-300">
+        Press SPACE or Tap to Jump!
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div class="game-ui mt-4">
+        <button id="startButton" class="btn bg-green-500 text-white hover:bg-green-600">
+            Start Game
+        </button>
+        <div id="scoreDisplay" class="text-white text-xl font-mono p-2 bg-gray-700 rounded-full px-4">
+            Score: 0
+        </div>
+        <div id="highScoreDisplay" class="text-white text-xl font-mono p-2 bg-gray-700 rounded-full px-4">
+            High: 0
+        </div>
+    </div>
+</div>
+
+<script>
+    // Global variables from Canvas environment (for Firestore, not used here, but good practice to define)
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+    // --- Game Constants ---
+    const CANVAS = document.getElementById('gameCanvas');
+    const CTX = CANVAS.getContext('2d');
+    const GROUND_HEIGHT = 20;
+    const ROBOT_WIDTH = 40; // Slightly wider for cuter look
+    const ROBOT_HEIGHT = 50; // Medium height
+    const JUMP_VELOCITY = -16; // Adjusted for taller robot
+    const GRAVITY = 0.8;
+    const INITIAL_GAME_SPEED = 5;
+
+    // --- Game State ---
+    let robot = {};
+    let obstacles = [];
+    let score = 0;
+    let highScore = localStorage.getItem('robotRunnerHighScore') || 0;
+    let gameSpeed = INITIAL_GAME_SPEED;
+    let gameRunning = false;
+    let animationFrameId;
+    let lastObstacleTime = 0;
+    const MIN_OBSTACLE_INTERVAL = 1000;
+    const MAX_OBSTACLE_INTERVAL = 2000;
+    let skyObjects = []; // For clouds, etc.
+
+    // --- UI Elements ---
+    const scoreDisplay = document.getElementById('scoreDisplay');
+    const highScoreDisplay = document.getElementById('highScoreDisplay');
+    const messageBox = document.getElementById('message-box');
+    const startButton = document.getElementById('startButton');
+
+    /**
+     * Set up the initial canvas dimensions and high score display.
+     */
+    function setupCanvas() {
+        // Set canvas width based on its container
+        CANVAS.width = CANVAS.offsetWidth;
+        CANVAS.height = 250;
+        highScoreDisplay.textContent = `High: ${highScore}`;
+    }
+
+    /**
+     * Initialize the robot's state.
+     */
+    function initRobot() {
+        robot = {
+            x: 50,
+            y: CANVAS.height - GROUND_HEIGHT - ROBOT_HEIGHT,
+            yVelocity: 0,
+            isJumping: false,
+            animFrame: 0,
+            blinkTimer: 0
+        };
+        obstacles = [];
+        skyObjects = [];
+        score = 0;
+        gameSpeed = INITIAL_GAME_SPEED;
+    }
+
+    /**
+     * Draw the cute robot character using Canvas API.
+     */
+    function drawRobot() {
+        const x = robot.x;
+        const y = robot.y;
+
+        // Main Body (Rounded Rect, Cyan)
+        CTX.fillStyle = '#22d3ee'; // Sky Blue / Cyan
+        CTX.beginPath();
+        CTX.roundRect(x, y, ROBOT_WIDTH, ROBOT_HEIGHT, 8);
+        CTX.fill();
+
+        // Head (Slightly lighter Cyan, smaller)
+        CTX.fillStyle = '#67e8f9';
+        CTX.beginPath();
+        CTX.roundRect(x + (ROBOT_WIDTH - ROBOT_WIDTH * 0.8) / 2, y - 20, ROBOT_WIDTH * 0.8, 20, 6);
+        CTX.fill();
+
+        // Eyes (White with Black pupils, expressive)
+        const eyeSize = 6;
+        const eyeOffset = 8;
+        CTX.fillStyle = 'white';
+        // Left eye
+        CTX.beginPath();
+        CTX.arc(x + eyeOffset, y - 10, eyeSize, 0, Math.PI * 2);
+        CTX.fill();
+        // Right eye
+        CTX.beginPath();
+        CTX.arc(x + ROBOT_WIDTH - eyeOffset, y - 10, eyeSize, 0, Math.PI * 2);
+        CTX.fill();
+
+        // Pupils (Black, slightly animated for blinking)
+        CTX.fillStyle = 'black';
+        robot.blinkTimer = (robot.blinkTimer + 1) % 150; // Blink every ~2.5 seconds
+        if (robot.blinkTimer < 5) { // Blink duration
+            // Closed eyes
+            CTX.fillRect(x + eyeOffset - eyeSize, y - 10 - 1, eyeSize * 2, 2);
+            CTX.fillRect(x + ROBOT_WIDTH - eyeOffset - eyeSize, y - 10 - 1, eyeSize * 2, 2);
+        } else {
+            // Open eyes
+            CTX.beginPath();
+            CTX.arc(x + eyeOffset, y - 10, eyeSize / 2, 0, Math.PI * 2);
+            CTX.fill();
+            CTX.beginPath();
+            CTX.arc(x + ROBOT_WIDTH - eyeOffset, y - 10, eyeSize / 2, 0, Math.PI * 2);
+            CTX.fill();
+        }
+
+
+        // Mouth (Small line, happy if not jumping, slightly down if jumping)
+        CTX.strokeStyle = '#334155'; // Dark blue-gray
+        CTX.lineWidth = 2;
+        CTX.beginPath();
+        if (robot.isJumping) {
+            // Slight frown or determined look
+            CTX.arc(x + ROBOT_WIDTH / 2, y + 5, 5, 0, Math.PI, true);
+        } else {
+            // Smile
+            CTX.arc(x + ROBOT_WIDTH / 2, y + 5, 5, 0, Math.PI, false);
+        }
+        CTX.stroke();
+
+
+        // Arms (Rounded, darker blue-gray)
+        CTX.fillStyle = '#475569';
+        const armWidth = 10;
+        const armHeight = 30;
+        // Left arm
+        CTX.beginPath();
+        CTX.roundRect(x - armWidth + 2, y + 15, armWidth, armHeight, 5);
+        CTX.fill();
+        // Right arm
+        CTX.beginPath();
+        CTX.roundRect(x + ROBOT_WIDTH - 2, y + 15, armWidth, armHeight, 5);
+        CTX.fill();
+
+        // Feet/Wheels (Darker blue-gray, rounded)
+        CTX.fillStyle = '#334155';
+        const footWidth = 18;
+        const footHeight = 10;
+        // Left foot
+        CTX.beginPath();
+        CTX.roundRect(x + 2, y + ROBOT_HEIGHT - 5, footWidth, footHeight, 5);
+        CTX.fill();
+        // Right foot
+        CTX.beginPath();
+        CTX.roundRect(x + ROBOT_WIDTH - footWidth - 2, y + ROBOT_HEIGHT - 5, footWidth, footHeight, 5);
+        CTX.fill();
+    }
+
+    /**
+     * Apply gravity and handle jumping logic.
+     */
+    function updateRobot() {
+        if (robot.isJumping || robot.y < CANVAS.height - GROUND_HEIGHT - ROBOT_HEIGHT) {
+            robot.yVelocity += GRAVITY;
+            robot.y += robot.yVelocity;
+
+            const groundY = CANVAS.height - GROUND_HEIGHT - ROBOT_HEIGHT;
+
+            // Landing check
+            if (robot.y >= groundY) {
+                robot.y = groundY;
+                robot.yVelocity = 0;
+                robot.isJumping = false;
+            }
+        }
+    }
+
+    /**
+     * Handle the jump action.
+     */
+    function jump() {
+        if (!gameRunning) return;
+
+        if (!robot.isJumping) {
+            robot.yVelocity = JUMP_VELOCITY;
+            robot.isJumping = true;
+        }
+    }
+
+    /**
+     * Create a new obstacle.
+     */
+    function spawnObstacle() {
+        const minHeight = 25;
+        const maxHeight = 60;
+        const minWidth = 20;
+        const maxWidth = 40;
+
+        const height = Math.random() * (maxHeight - minHeight) + minHeight;
+        const width = Math.random() * (maxWidth - minWidth) + minWidth;
+
+        obstacles.push({
+            x: CANVAS.width,
+            y: CANVAS.height - GROUND_HEIGHT - height,
+            width: width,
+            height: height,
+            passed: false
+        });
+    }
+
+    /**
+     * Draw the obstacles (simple futuristic blocks).
+     */
+    function drawObstacles() {
+        CTX.fillStyle = '#f87171'; // Lighter red for hazards
+        obstacles.forEach(obs => {
+            // Draw the main block
+            CTX.beginPath();
+            CTX.roundRect(obs.x, obs.y, obs.width, obs.height, 5); // Rounded obstacles
+            CTX.fill();
+
+            // Add a small metallic accent
+            CTX.fillStyle = '#fcd34d'; // Gold/Yellow for metallic shine
+            CTX.fillRect(obs.x + obs.width * 0.1, obs.y + obs.height - 8, obs.width * 0.8, 4);
+
+            // Reset color for next block
+            CTX.fillStyle = '#f87171';
+        });
+    }
+
+    /**
+     * Update obstacle positions and remove off-screen ones.
+     */
+    function updateObstacles() {
+        for (let i = 0; i < obstacles.length; i++) {
+            const obs = obstacles[i];
+            obs.x -= gameSpeed;
+
+            // Remove obstacles that have moved off-screen
+            if (obs.x + obs.width < 0) {
+                obstacles.splice(i, 1);
+                i--; // Adjust index after removal
+            }
+
+            // Check if robot passed the obstacle for scoring
+            if (obs.x < robot.x && !obs.passed) {
+                score++;
+                obs.passed = true;
+                // Increase speed every 10 points
+                if (score % 10 === 0) {
+                    gameSpeed += 0.5;
+                }
+            }
+        }
+    }
+
+    /**
+     * Check for collision between robot and any obstacle.
+     * @returns {boolean} True if collision occurs.
+     */
+    function checkCollision() {
+        const robotRight = robot.x + ROBOT_WIDTH;
+        const robotBottom = robot.y + ROBOT_HEIGHT;
+
+        for (const obs of obstacles) {
+            const obsRight = obs.x + obs.width;
+            const obsBottom = obs.y + obs.height;
+
+            // Simple Axis-Aligned Bounding Box (AABB) collision detection
+            if (robotRight > obs.x &&        // Robot's right side is past obstacle's left side
+                robot.x < obsRight &&        // Robot's left side is before obstacle's right side
+                robotBottom > obs.y &&       // Robot's bottom is past obstacle's top side
+                robot.y < obsBottom) {       // Robot's top side is before obstacle's bottom side
+                return true; // Collision detected
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Spawn a new sky object (e.g., cloud).
+     */
+    function spawnSkyObject() {
+        const type = Math.random() > 0.5 ? 'cloud' : 'star'; // More clouds than stars during the day
+        const y = Math.random() * (CANVAS.height / 2 - 20) + 10; // Upper half of the sky
+        const speedMultiplier = (type === 'cloud') ? 0.3 : 0.1; // Clouds move faster than distant stars
+
+        skyObjects.push({
+            type: type,
+            x: CANVAS.width,
+            y: y,
+            width: Math.random() * 60 + 40, // Cloud width
+            height: Math.random() * 20 + 10, // Cloud height
+            speed: gameSpeed * speedMultiplier + Math.random() * 0.5
+        });
+    }
+
+    /**
+     * Draw sky objects (clouds and distant stars).
+     */
+    function drawSkyObjects() {
+        skyObjects.forEach(obj => {
+            if (obj.type === 'cloud') {
+                CTX.fillStyle = 'rgba(255, 255, 255, 0.8)'; // Semi-transparent white
+                CTX.beginPath();
+                CTX.arc(obj.x, obj.y, obj.width / 4, 0, Math.PI * 2);
+                CTX.arc(obj.x + obj.width * 0.4, obj.y - obj.height * 0.3, obj.width / 3, 0, Math.PI * 2);
+                CTX.arc(obj.x + obj.width * 0.7, obj.y, obj.width / 4, 0, Math.PI * 2);
+                CTX.arc(obj.x + obj.width * 0.3, obj.y + obj.height * 0.2, obj.width / 5, 0, Math.PI * 2);
+                CTX.fill();
+            } else if (obj.type === 'star') {
+                CTX.fillStyle = 'rgba(255, 255, 255, 0.6)'; // Faint white
+                CTX.beginPath();
+                CTX.arc(obj.x, obj.y, 2, 0, Math.PI * 2); // Small star
+                CTX.fill();
+            }
+        });
+    }
+
+    /**
+     * Update sky object positions and remove off-screen ones.
+     */
+    function updateSkyObjects() {
+        for (let i = 0; i < skyObjects.length; i++) {
+            const obj = skyObjects[i];
+            obj.x -= obj.speed;
+
+            if (obj.x + obj.width < 0) {
+                skyObjects.splice(i, 1);
+                i--;
+            }
+        }
+
+        // Spawn new sky objects periodically
+        if (Math.random() < 0.005) { // Adjust frequency
+            spawnSkyObject();
+        }
+    }
+
+
+    /**
+     * Draw the ground plane and sky background.
+     */
+    function drawEnvironment() {
+        // Sky (dynamic gradient with time of day - simplified for now)
+        const skyGradient = CTX.createLinearGradient(0, 0, 0, CANVAS.height / 1.5);
+        skyGradient.addColorStop(0, '#a7e6f6'); // Light blue top
+        skyGradient.addColorStop(1, '#f0fdf4'); // Very light green/white bottom
+        CTX.fillStyle = skyGradient;
+        CTX.fillRect(0, 0, CANVAS.width, CANVAS.height - GROUND_HEIGHT);
+
+        drawSkyObjects(); // Draw moving clouds/stars
+
+        // Ground (Concrete/Metal Platform)
+        CTX.fillStyle = '#4b5563';
+        CTX.fillRect(0, CANVAS.height - GROUND_HEIGHT, CANVAS.width, GROUND_HEIGHT);
+
+        // Ground Detail (Runway stripes) - scroll with game speed
+        CTX.fillStyle = '#9ca3af';
+        const stripeWidth = 60;
+        const stripeGap = 40;
+        const totalStripePattern = stripeWidth + stripeGap;
+
+        for (let x = 0; x < CANVAS.width + totalStripePattern; x += totalStripePattern) {
+            const offset = (Date.now() * gameSpeed * 0.005) % totalStripePattern;
+            CTX.fillRect(x - offset, CANVAS.height - GROUND_HEIGHT + 5, stripeWidth, 2);
+        }
+
+        // Update UI score display
+        scoreDisplay.textContent = `Score: ${score}`;
+    }
+
+    /**
+     * Game Over routine.
+     */
+    function gameOver() {
+        cancelAnimationFrame(animationFrameId);
+        gameRunning = false;
+
+        // Update High Score
+        if (score > highScore) {
+            highScore = score;
+            localStorage.setItem('robotRunnerHighScore', highScore);
+            highScoreDisplay.textContent = `High: ${highScore} (New!)`;
+        }
+
+        // Display Game Over message
+        messageBox.className = 'text-center mb-4 p-2 w-full text-2xl font-bold text-red-500 transition-opacity duration-300 opacity-100';
+        messageBox.textContent = `Game Over! Final Score: ${score}`;
+        startButton.textContent = 'Play Again';
+        startButton.classList.replace('bg-green-500', 'bg-red-500');
+        startButton.classList.replace('hover:bg-green-600', 'hover:bg-red-600');
+    }
+
+    /**
+     * Main game loop (runs 60 times per second).
+     * @param {number} currentTime The time provided by requestAnimationFrame.
+     */
+    function gameLoop(currentTime) {
+        if (!gameRunning) return;
+
+        // Clear the canvas
+        CTX.clearRect(0, 0, CANVAS.width, CANVAS.height);
+
+        // 1. Update Game Logic
+        updateRobot();
+        updateObstacles();
+        updateSkyObjects();
+
+        // 2. Draw Everything
+        drawEnvironment(); // Draws sky and ground
+        drawObstacles();
+        drawRobot();
+
+        // 3. Collision Check
+        if (checkCollision()) {
+            gameOver();
+            return;
+        }
+
+        // 4. Obstacle Spawning
+        const deltaTime = currentTime - lastObstacleTime;
+        // Adjust spawn rate based on game speed for challenge
+        const currentMinInterval = MIN_OBSTACLE_INTERVAL / (gameSpeed / INITIAL_GAME_SPEED);
+        const currentMaxInterval = MAX_OBSTACLE_INTERVAL / (gameSpeed / INITIAL_GAME_SPEED);
+
+        if (deltaTime > Math.random() * (currentMaxInterval - currentMinInterval) + currentMinInterval) {
+            spawnObstacle();
+            lastObstacleTime = currentTime;
+        }
+
+        // 5. Request next frame
+        animationFrameId = requestAnimationFrame(gameLoop);
+    }
+
+    /**
+     * Starts or restarts the game.
+     */
+    function startGame() {
+        if (gameRunning) return;
+
+        setupCanvas();
+        initRobot();
+        gameRunning = true;
+        lastObstacleTime = performance.now(); // Initialize time
+
+        // Reset UI
+        messageBox.className = 'text-center mb-4 p-2 w-full text-lg font-semibold text-yellow-300 transition-opacity duration-300 opacity-100';
+        messageBox.textContent = 'Running...';
+        startButton.textContent = 'Restart';
+        startButton.classList.replace('bg-red-500', 'bg-green-500');
+        startButton.classList.replace('hover:bg-red-600', 'hover:bg-green-600');
+        highScoreDisplay.textContent = `High: ${highScore}`;
+        scoreDisplay.textContent = `Score: 0`;
+
+        // Start the loop
+        animationFrameId = requestAnimationFrame(gameLoop);
+    }
+
+    // --- Event Listeners ---
+
+    // Jump on Spacebar press
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+            e.preventDefault(); // Prevent page scrolling
+            jump();
+        }
+    });
+
+    // Jump on click/tap
+    CANVAS.addEventListener('click', () => {
+        if (!gameRunning) {
+            startGame();
+        } else {
+            jump();
+        }
+    });
+
+    // Start button handler
+    startButton.addEventListener('click', startGame);
+
+    // Handle screen resizing
+    window.addEventListener('resize', setupCanvas);
+
+    // Initial setup on load
+    window.onload = function() {
+        setupCanvas();
+        initRobot(); // Draw robot on screen before game starts
+        drawEnvironment();
+        drawRobot();
+        messageBox.textContent = 'Press START or Tap the Canvas to begin!';
+        messageBox.className = 'text-center mb-4 p-2 w-full text-xl font-bold text-yellow-300 transition-opacity duration-300 opacity-100';
+    };
+
+</script>
+</body>
+</html>
